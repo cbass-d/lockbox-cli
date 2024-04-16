@@ -15,3 +15,9 @@ user-friendly console environment. Below is a brief overview of the program's fe
 ### Management
 * Users can manage encryption keys stored in the keyring database. This includes adding new keys, deleting existing keys, 
 and modifying key comments.
+
+### Running
+From inside ```nses_cli``` directory:
+``` source .venv/bin/activate```
+``` pip install -r requirements.txt```
+```python src/cli.py```

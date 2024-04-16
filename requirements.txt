@@ -1,0 +1,10 @@
+argon2==0.1.10
+argon2-cffi==23.1.0
+argon2-cffi-bindings==21.2.0
+bitarray==2.9.2
+cffi==1.16.0
+markdown-it-py==3.0.0
+mdurl==0.1.2
+pycparser==2.22
+Pygments==2.17.2
+rich==13.7.1

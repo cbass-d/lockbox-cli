@@ -17,3 +17,8 @@ user-friendly console environment. Below is a brief overview of the program's fe
 and modifying key comments.
 
 ### Running
+To run LOCKBOX CLI:  
+```cd build```  
+```make```  
+```cd ..```  
+```python3 src/cli.py```

@@ -1,7 +1,7 @@
-# NSES CLI
+# LOCKBOX CLI
 ## CLI for encrypting files
 
-NSSES CLI is a Python program designed to provide encryption and decryption functionalities in a 
+LOCKBOX CLI is a Python program designed to provide encryption and decryption functionalities in a 
 user-friendly console environment. Below is a brief overview of the program's features and functionalities:
 
 ### Setup
@@ -17,7 +17,3 @@ user-friendly console environment. Below is a brief overview of the program's fe
 and modifying key comments.
 
 ### Running
-From inside ```nses_cli``` directory:  
-``` source .venv/bin/activate```  
-``` pip install -r requirements.txt```  
-```python src/cli.py```

@@ -1,12 +1,13 @@
 import sqlite3
 import argon2
+import hashlib
 from rich.table import Table
 from pathlib import Path
-from src.Encryption import nses
 from os import remove, environ
 from pathlib import Path
 
 from console_config import console
+from ciphers import encryption_db, decryption_db
 
 DB_PATH = Path("./db/keys.db")
 
@@ -20,7 +21,7 @@ def check_for_db() -> int:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute("CREATE TABLE Keyring(id integer primary key autoincrement, created text, comments text, key text)")
-            conn.close()
+            if conn: conn.close()
             return 1
         except sqlite3.Error as err:
             if conn: conn.close()
@@ -76,7 +77,7 @@ def dump_keys(display: bool) -> int:
     if res:
         for entry in res:
             entry_id, entry_date, entry_comm, entry_key = entry
-            table.add_row(str(entry_id), entry_date, entry_comm, entry_key)
+            table.add_row(str(entry_id), entry_date, entry_comm, entry_key.hex())
         console.print("Keys in Keyring\n" + "-" * 15, justify="left", style="header")
         console.print(table)  
 
@@ -165,12 +166,14 @@ def verify_hash(phrase: str, key_id: int) -> bool:
         handle_db_error(err)
         return False
 
-    try:
-        valid = argon2.PasswordHasher().verify(res_cur.fetchone()[0], phrase)
+    hash = (res_cur.fetchone()[0])
+    hash = hash[:16]
+    console.print(hash.hex())
+    if (hash == hashlib.shake_128(phrase.encode('utf-8')).digest(16)):
         if conn: conn.close()
         close_db()
-        return valid
-    except argon2.exceptions.VerifyMismatchError or argon2.exceptions.VerificationError as err:
+        return True
+    else:
         if conn: conn.close()
         close_db()
         return False
@@ -189,11 +192,11 @@ def db_okay(db_path: str) -> bool:
     return True
 
 def open_db():
-    nses.run(str(DB_PATH)+".enc", 2, environ.get("MAIN_KEY"))
+    decryption_db(str(DB_PATH)+".enc", bytes(environ.get("MAIN_KEY"), encoding='utf-8'))
     remove(Path(str(DB_PATH)+".enc"))
     return
 
 def close_db():
-    nses.run(DB_PATH, 1, environ.get("MAIN_KEY"))
+    encryption_db(DB_PATH, bytes(environ.get("MAIN_KEY"), encoding='utf-8'))
     remove(DB_PATH)
     return

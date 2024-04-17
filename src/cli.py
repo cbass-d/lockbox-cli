@@ -1,24 +1,28 @@
-import argon2
 import hashlib
+import Crypto.Random
+from Crypto.Cipher import AES
 from pathlib import Path
 from rich.text import Text
 from datetime import datetime, date
 from os import remove, environ
 from shutil import copy
 
-import src.Encryption.nses as nses
 import db_operations as db
+import ciphers
 from console_config import console
 
 DB_PATH = Path("./db/keys.db")
 
 BANNER = Text('''
-  _   _   ____    ____    _____   ____  
- | \ | | / ___|  / ___|  | ____| / ___| 
- |  \| | \___ \  \___ \  |  _|   \___ \ 
- | |\  |  ___) |  ___) | | |___   ___) |
- |_| \_| |____/  |____/  |_____| |____/ 
-    Not So Simple Encryption Scheme
+---------------------------------------------------------------------
+   _     _____ _____  _   ________  _______   __  _____  _     _____ 
+| |   |  _  /  __ \| | / /| ___ \|  _  \ \ / / /  __ \| |   |_   _|
+| |   | | | | /  \/| |/ / | |_/ /| | | |\ V /  | /  \/| |     | |  
+| |   | | | | |    |    \ | ___ \| | | |/   \  | |    | |     | |  
+| |___\ \_/ / \__/\| |\  \| |_/ /\ \_/ / /^\ \ | \__/\| |_____| |_ 
+\_____/\___/ \____/\_| \_/\____/  \___/\/   \/  \____/\_____/\___/ 
+
+---------------------------------------------------------------------                                                                                                                                   
 ''', style="banner")
 
 def fetch_file_info(path: Path) -> list:
@@ -84,10 +88,14 @@ def get_dec_key() -> str:
 def create_key_from_passphrase(prompt_for_storing: bool) -> list:
     prompt = Text("\nEnter passphrase to use: ", style="prompt")
     passphrase = get_input(prompt, True)
-    argon_hasher = argon2.PasswordHasher(hash_len=12)
-    ph = argon_hasher.hash(passphrase)
-    enc_key = ph
-    
+    ph = hashlib.shake_128(passphrase.encode('utf-8')).digest(16)
+    iv = Crypto.Random.get_random_bytes(16)
+    enc_key = bytearray()
+    for b in ph:
+        enc_key.append(b)
+    for b in iv:
+        enc_key.append(b)
+
     if prompt_for_storing:
         prompt = Text("Store key in database? [Y/N] ")
         store = get_input(prompt, False)
@@ -100,7 +108,8 @@ def create_key_from_passphrase(prompt_for_storing: bool) -> list:
             created_str = created_date.strftime("%m-%d-%y %H:%M:%S")
             db.add_new_key(created_str, comments, enc_key)
         else:
-            console.print(Text("(+) Hash used for encryption (Argon2 Hash): " + enc_key + "\n(Last 16-bytes are is actualy key content)", style="header"))
+            console.print(Text("(+) Hash used for encryption: ", style="header"))
+            console.print(enc_key)
             return [None, None, enc_key]
     else:
         prompt = Text("Add comments to key entry: ", style="prompt")
@@ -272,10 +281,9 @@ def chose_encryption() -> int:
             return encrypt
         elif user_int == 3:
             return encrypt
-
         break
-
-    nses.run(path, 1, enc_key)
+    
+    ciphers.encryption(path, enc_key)
 
     try:
         remove(path)
@@ -312,8 +320,7 @@ def chose_decryption() -> int:
         console.print("(-) Unable to get decryption key.", justify="left", style="error")
         return decrypt
     else:
-        nses.run(path, 2, key)
-
+        ciphers.decryption(path, key)
         try:
             remove(path)
         except:
@@ -359,11 +366,10 @@ def chose_mgmt() -> int:
 def initial_setup():
     prompt = Text("Keyring database will be encrypted using a passphrase (IT WILL NOT BE STORED)\nEnter passphrase to use to encrypt Keyring database: ", style="prompt")
     passphrase = get_input(prompt, True)
-    hash = hashlib.shake_256(passphrase.encode('utf-8')).digest(16)
-    hash = str(hash)
-    nses.run(DB_PATH, 1, hash)
-    environ["MAIN_KEY"]= hash
-    remove(DB_PATH)
+    hash = hashlib.shake_128(passphrase.encode('utf-8')).digest(16)
+    environ["MAIN_KEY"]= hash.hex()
+    db.close_db()
+    console.print(environ.get("MAIN_KEY"))
     return
 
 def get_main_db_key():
@@ -371,15 +377,14 @@ def get_main_db_key():
     db_copy = str(DB_PATH)+".copy"
     while True:
         user_input = get_input(prompt, True)
-        hash = hashlib.shake_256(user_input.encode('utf-8')).digest(16)
-        hash = str(hash)
+        hash = hashlib.shake_128(user_input.encode('utf-8')).digest(16)
         copy(str(DB_PATH)+".enc", db_copy)
-        nses.run(db_copy, 2, hash)
+        ciphers.decryption_db(db_copy, bytes(hash.hex(), encoding='utf-8'))
 
         if (db.db_okay(db_copy)):
             copy(db_copy, DB_PATH)
             remove(db_copy)
-            nses.run(DB_PATH, 1, hash)
+            ciphers.decryption_db(db_copy, bytes(hash.hex(), encoding='utf-8'))
             remove(DB_PATH)
             break
         else:
@@ -387,7 +392,7 @@ def get_main_db_key():
             invalid_warning(Text("(-) Invalid passphrase provided."), False)
             continue
    
-    return hash
+    return hash.hex()
         
 def main():
     global start, encrypt, decrypt, manage

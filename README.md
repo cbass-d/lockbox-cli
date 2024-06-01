@@ -18,7 +18,10 @@ and modifying key comments.
 
 ### Running
 To run LOCKBOX CLI:  
-```cd build```  
-```make```  
-```cd ..```  
-```python3 src/cli.py```
+```
+cd build  
+make  
+cd ..  
+python3 src/cli.py
+
+```

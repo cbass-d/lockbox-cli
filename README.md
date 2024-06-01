@@ -23,5 +23,4 @@ cd build
 make  
 cd ..  
 python3 src/cli.py
-
 ```

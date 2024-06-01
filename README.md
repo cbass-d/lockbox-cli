@@ -21,7 +21,7 @@ A python virtual enviornment (venv) is used to run the CLI
 
 To run LOCKBOX CLI:  
 ```
-$cd build  
+$ cd build  
 $ make  
 $ cd .. 
 $ source virtual_env/bin/activate

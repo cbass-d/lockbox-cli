@@ -1,6 +1,5 @@
 import hashlib
 import Crypto.Random
-from Crypto.Cipher import AES
 from pathlib import Path
 from rich.text import Text
 from datetime import datetime, date

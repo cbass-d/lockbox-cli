@@ -1,5 +1,4 @@
 import sqlite3
-import argon2
 import hashlib
 from rich.table import Table
 from pathlib import Path

@@ -1,9 +1,8 @@
+BIN=../virtual_env/bin
+
 build:
 	@python3 -m venv ../virtual_env
-	@make activate; python3 -m pip install --upgrade pip; python3 -m pip install -r ./requirements.txt
-
-activate:
-	@. ../virtual_env/bin/activate
+	@$(BIN)/python3 -m pip install --upgrade pip; $(BIN)/python3 -m pip install -r ./requirements.txt
 
 reqs:
-	@make activate; pip freeze > requirements.txt
+	@$(BIN)/pip freeze > requirements.txt

@@ -17,10 +17,16 @@ user-friendly console environment. Below is a brief overview of the program's fe
 and modifying key comments.
 
 ### Running
+A python virtual enviornment (venv) is used to run the CLI
+
 To run LOCKBOX CLI:  
 ```
-cd build  
-make  
-cd ..  
-python3 src/cli.py
+$cd build  
+$ make  
+$ cd .. 
+$ source virtual_env/bin/activate
+$ python3 src/cli.py
 ```
+To exit venv:
+```
+$ deactivate

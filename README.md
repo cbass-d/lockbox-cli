@@ -25,6 +25,7 @@ $ cd build
 $ make  
 $ cd .. 
 $ source virtual_env/bin/activate
+$ mkdir db
 $ python3 src/cli.py
 ```
 To exit venv:

@@ -25,7 +25,7 @@ $ cd build
 $ make  
 $ cd .. 
 $ source virtual_env/bin/activate
-$ mkdir db
+$ mkdir db   ## Folder to hold keyring database
 $ python3 src/cli.py
 ```
 To exit venv:

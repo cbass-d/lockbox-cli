@@ -1,28 +1,36 @@
-import hashlib
-import Crypto.Random
 from pathlib import Path
 from rich.text import Text
 from datetime import datetime, date
-from os import remove, environ
-from shutil import copy
+from os import mkdir
+from enum import Enum
+from platformdirs import user_data_dir
 
-import db_operations as db
+from keyring_database import KeyringDB, HashEntry
 import ciphers
 from console_config import console
+import hashing
 
-DB_PATH = Path("./db/keys.db")
+DB_PATH = ""
 
 BANNER = Text('''
 ---------------------------------------------------------------------
-   _     _____ _____  _   ________  _______   __  _____  _     _____ 
+ _     _____ _____  _   ________  _______   __  _____  _     _____
 | |   |  _  /  __ \| | / /| ___ \|  _  \ \ / / /  __ \| |   |_   _|
-| |   | | | | /  \/| |/ / | |_/ /| | | |\ V /  | /  \/| |     | |  
-| |   | | | | |    |    \ | ___ \| | | |/   \  | |    | |     | |  
-| |___\ \_/ / \__/\| |\  \| |_/ /\ \_/ / /^\ \ | \__/\| |_____| |_ 
-\_____/\___/ \____/\_| \_/\____/  \___/\/   \/  \____/\_____/\___/ 
+| |   | | | | /  \/| |/ / | |_/ /| | | |\ V /  | /  \/| |     | |
+| |   | | | | |    |    \ | ___ \| | | |/   \  | |    | |     | |
+| |___\ \_/ / \__/\| |\  \| |_/ /\ \_/ / /^\ \ | \__/\| |_____| |_
+\_____/\___/ \____/\_| \_/\____/  \___/\/   \/  \____/\_____/\___/
 
----------------------------------------------------------------------                                                                                                                                   
+---------------------------------------------------------------------
 ''', style="banner")
+
+
+class State(Enum):  # State of application
+    START = 0
+    ENCRYPT = 1
+    DECRYPT = 2
+    MANAGE = 3
+
 
 def fetch_file_info(path: Path) -> list:
     owner = path.owner()
@@ -32,407 +40,433 @@ def fetch_file_info(path: Path) -> list:
 
     return list([owner, str(size), ltm_str])
 
-def get_input(prompt: Text, password: bool) -> str:
+
+def user_input(prompt: Text, password: bool) -> str:
     try:
-        if password: input = console.input(prompt, password=True)
-        else: input = console.input(prompt)
-        if ((input.casefold() == "q") or (input.casefold() == "exit")): 
+        if password:
+            input = console.input(prompt, password=True)
+        else:
+            input = console.input(prompt)
+        if ((input.casefold() == "q") or (input.casefold() == "exit")):
             exit()
     except EOFError or KeyError:
         exit()
-    
+
     return input
+
 
 def invalid_warning(error: Text, clear: bool):
     error = error.append("Press Enter to retry. Ctr-D to exit.")
     console.print(error, justify="left", style="error")
     input_prompt = Text("")
-    get_input(input_prompt, False)
-    
-    if clear: 
+    user_input(prompt=input_prompt, password=False)
+
+    if clear:
         console.clear()
         console.print(BANNER)
-    
+
     return
 
-def reset() -> int:
-    console.print("Press Enter to return to main menu. Ctr-D to exit.", justify="left", style="header")
-    get_input(Text(""), False)
-    
-    return start
 
-def get_dec_key() -> str:
-    console.print("1 - Enter key manually\n2 - Use key from database\n3 - Return", justify="left", style="default")
+def reset() -> State:
+    console.print("Press Enter to return to main menu. Ctr-D to exit.",
+                  justify="left", style="header")
+    user_input(Text(""), False)
+
+    return State.START
+
+
+def get_hash(keyring_db: KeyringDB) -> str:
+    console.print("1 - Enter hash manually\n2 - Use hash from database\n3 - Return",
+                  justify="left", style="default")
     prompt = Text(": ", style="prompt")
-    
+
     while True:
-        user_input = get_input(prompt, False)
+        input = user_input(prompt, False)
         try:
-            user_int = int(user_input)
-            if user_int not in range(1,4):
+            user_int = int(input)
+            if user_int not in range(1, 4):
                 invalid_warning(Text("(-) Invalid option."), False)
                 continue
-            else: break
+            else:
+                break
         except ValueError:
             invalid_warning(Text("(-) Invalid input."), False)
             continue
-    
+
     if user_int == 1:
-        return enter_key_manualy()
+        return manual_hash_entry()
     elif user_int == 2:
-        return use_key_from_db()
-    
-    return ""
+        return use_hash_from_db(keyring_db)
 
-def create_key_from_passphrase(prompt_for_storing: bool) -> list:
+
+def create_argon2_hash() -> str:
     prompt = Text("\nEnter passphrase to use: ", style="prompt")
-    passphrase = get_input(prompt, True)
-    ph = hashlib.shake_128(passphrase.encode('utf-8')).digest(16)
-    iv = Crypto.Random.get_random_bytes(16)
-    enc_key = bytearray()
-    for b in ph:
-        enc_key.append(b)
-    for b in iv:
-        enc_key.append(b)
+    passphrase = user_input(prompt=prompt, password=True)
 
-    if prompt_for_storing:
-        prompt = Text("Store key in database? [Y/N] ")
-        store = get_input(prompt, False)
-        store = store.casefold()
-        if store == "y" or store == "yes":
-            console.print("(+) Storing key.", justify="left", style="header")
-            prompt = Text("Add comments to key entry: ", style="prompt")
-            comments = get_input(prompt, False)
-            created_date = datetime.now()
-            created_str = created_date.strftime("%m-%d-%y %H:%M:%S")
-            db.add_new_key(created_str, comments, enc_key)
-        else:
-            console.print(Text("(+) Hash used for encryption: ", style="header"))
-            console.print(enc_key)
-            return [None, None, enc_key]
-    else:
-        prompt = Text("Add comments to key entry: ", style="prompt")
-        comments = get_input(prompt, False)
-        created_date = datetime.now()
-        created_str = created_date.strftime("%m-%d-%y %H:%M:%S")
-        db.add_new_key(created_str, comments, enc_key)
- 
-    return [created_str, comments, enc_key]
+    argon2_hash = hashing.hash_passphrase(passphrase)
 
-def enter_key_manualy() -> str:
-    prompt = (Text("Enter key contents: ", style="prompt"))
+    return argon2_hash
+
+
+def create_new_hash_entry() -> list:
+    new_hash = create_argon2_hash()
+
+    prompt = Text("Add comments to key entry: ", style="header")
+    comments = user_input(prompt=prompt, password=False)
+    date_created = datetime.now()
+    date_str = date_created.strftime("%m-%d-%y %H:%M:%S")
+
+    return [date_str, comments, new_hash]
+
+
+def manual_hash_entry() -> str:
+    prompt = (Text("Enter hash: ", style="prompt"))
     while True:
-        key = get_input(prompt, False)
+        key = user_input(prompt, False)
         if not key.isascii():
-            invalid_warning(Text("(-) Key must only contain valid ASCII values."), False)
+            invalid_warning(
+                Text("(-) Hash must only contain valid ASCII values\n"), clear=False)
             continue
         elif len(key) != 16:
-            invalid_warning(Text("(-) Key must be 16 characters long."), False)
+            invalid_warning(
+                Text("(-) Hash must be 32 characters long\n"), clear=False)
             continue
-        else: 
+        else:
             break
-    
-    return key
 
-def use_key_from_db() -> str:
+    return hash
+
+
+def use_hash_from_db(keyring_db: KeyringDB) -> str:
     # Fetch key ids in database
-    valid_ids = db.get_valid_ids()
-    
+    valid_ids = keyring_db.get_valid_ids()
+
     if not valid_ids:
-        invalid_warning(Text("(-) No stored keys.\n"), True)
+        invalid_warning(Text("(-) No stored hashes\n"), clear=True)
         return ""
     else:
-        db.dump_keys(True)
-        prompt = Text("Enter ID of key to use: ", style="prompt")
+        keyring_db.dump_keys()
+        prompt = Text("Enter ID of hash to use: ", style="prompt")
         while True:
-            user_input = get_input(prompt, False)
+            input = user_input(prompt, password=False)
             try:
-                chosen_id = int(user_input)
-                if chosen_id not in valid_ids:
-                    invalid_warning(Text("(-) Key ID does not exist."), False)
+                hash_id = int(input)
+                if hash_id not in valid_ids:
+                    invalid_warning(
+                        Text("(-) Hash ID does not exist\n"), clear=False)
                     continue
-                else: break
+                else:
+                    break
             except ValueError:
-                invalid_warning(Text("(-) Invalid key ID."), False)
+                invalid_warning(Text("(-) Invalid hash ID\n"), clear=False)
                 continue
 
         # Verify use of key through correct passphrase
-        prompt = Text("Enter passphrase for key: ", style="prompt")
+        prompt = Text("Entr passphrase for chosen hash: ", style="prompt")
         while True:
-            user_input = get_input(prompt, False)
-
-            if (db.verify_hash(user_input, chosen_id)):
-                # Fetch chosen key from db
-                key = db.fetch_key(chosen_id)     
+            input = user_input(prompt, password=False)
+            if (keyring_db.verify_hash(input, hash_id)):
+                hash = keyring_db.fetch_hash(hash_id)
+                argon2_hash = hashing.parse_argon2_hash(hash)
                 break
             else:
-                invalid_warning(Text("(-) Invalid passphrase provided for key."), False)
+                invalid_warning(
+                    Text("(-) Invalid passphrase provided for hash\n"), clear=False)
 
-    return key
+    return argon2_hash.digest
 
-def choose_key_to_delete() -> int:
-    valid_ids = db.get_valid_ids()
+
+def delete_hash(keyring_db: KeyringDB) -> int:
+    valid_ids = keyring_db.get_valid_ids()
     if not valid_ids:
         console.print("(-) No stored keys", justify="left", style="error")
         return -1
-    
-    else:
-        db.dump_keys(True)
-        while True:
-            prompt = Text("ID of key to delete: ", style="prompt")
-            key_id_str = get_input(prompt, False)
 
-            try:
-                key_id = int(key_id_str)
-                if key_id not in valid_ids:
-                    invalid_warning(Text("(-) Key ID does not exist."), False)
-                    continue
-                else: break
-            except ValueError:
-                invalid_warning(Text("(-) Invalid key id."), False)
-                continue
-    
-        return db.delete_key(key_id)
-    
-def edit_comments() -> int:
-    valid_ids = db.get_valid_ids()
-
-    if not valid_ids:
-        invalid_warning(Text("(-) No keys stored."), True)
-        return -1
-    else:
-        db.dump_keys(True)
-        while True:
-            prompt = Text("Enter ID of entry to be edited: ", style="prompt")
-            key_id_str = get_input(prompt, False)
-
-            try:
-                key_id = int(key_id_str)
-                if key_id not in valid_ids:
-                    invalid_warning(Text("(-) Key ID does not exist."), False)
-                    continue
-                else: break
-            except ValueError:
-                invalid_warning(Text("(-) Invalid key id"), False)
-                continue
-    
-        prompt = Text("Change comment: ", style="prompt")
-        user_comment = get_input(prompt, False)
-        update = [user_comment, key_id]
-
-        return db.change_comments(update)
-
-def start_menu() -> int:
+    keyring_db.dump_keys()
     while True:
-        console.print("1 - Encrypt File\n2 - Decrypt File\n3 - Manage Stored Keys", justify="left", style="default")
-        user_input = get_input(Text(": ", style="prompt"), False)
+        prompt = Text("ID of key to delete: ", style="prompt")
+        input = user_input(prompt, password=False)
+
         try:
-            user_int = int(user_input)
-            if user_int not in range(1,4): invalid_warning(Text("(-) Invalid option."), True)
-            else: 
-                state = user_int
+            key_id = int(input)
+            if key_id not in valid_ids:
+                invalid_warning(
+                    Text("(-) Key ID does not exist\n"), clear=False)
+                continue
+            else:
                 break
         except ValueError:
-            invalid_warning(Text("(-) Invalid input."), True)
+            invalid_warning(Text("(-) Invalid key id\n"), clear=False)
             continue
-    
+
+    return keyring_db.delete_hash(key_id)
+
+
+def edit_comments(keyring_db: KeyringDB) -> int:
+    valid_ids = keyring_db.get_valid_ids()
+
+    if not valid_ids:
+        invalid_warning(Text("(-) No keys stored\n"), clear=True)
+        return -1
+
+    keyring_db.dump_keys()
+    while True:
+        prompt = Text("Enter ID of entry to be edited: ", style="prompt")
+        input = user_input(prompt, password=False)
+
+        try:
+            hash_id = int(input)
+            if hash_id not in valid_ids:
+                invalid_warning(
+                    Text("(-) Hash ID does not exist\n"), clear=False)
+                continue
+            else:
+                break
+        except ValueError:
+            invalid_warning(Text("(-) Invalid hash id\n"), clear=False)
+            continue
+
+    prompt = Text("Updated comments: ", style="prompt")
+    updated_comment = user_input(prompt, password=False)
+    update = [updated_comment, hash_id]
+
+    return keyring_db.edit_comments(update)
+
+
+def start_menu() -> State:
+    while True:
+        console.print("1 - Encrypt File\n2 - Decrypt File\n3 - Manage Stored Hashes",
+                      justify="left", style="default")
+        input = user_input(prompt=Text(": ", style="prompt"), password=False)
+        try:
+            user_int = int(input)
+            if user_int not in range(1, 4):
+                invalid_warning(Text("(-) Invalid option\n"), clear=True)
+            else:
+                state = user_int
+                match state:
+                    case 1:
+                        state = State.ENCRYPT
+                    case 2:
+                        state = State.DECRYPT
+                    case 3:
+                        state = State.MANAGE
+            break
+        except ValueError:
+            invalid_warning(Text("(-) Invalid input\n"), clear=True)
+            continue
+
     return state
 
-def chose_encryption() -> int:
+
+def chose_encryption(keyring_db: KeyringDB) -> State:
     while True:
         prompt = Text("Enter path to file: ", style="prompt")
-        path_str = get_input(prompt, False)
+        path_str = user_input(prompt, False)
         console.print("")
         path = Path(path_str)
 
         if not path.exists():
-            invalid_warning(Text("(-) Path does not exist."), True)
+            invalid_warning(Text("(-) Path does not exist\n"), clear=True)
             continue
         elif path.is_dir():
-            invalid_warning(Text("(-) Path is a directory."), True)
+            invalid_warning(Text("(-) Path is a directory\n"), clear=True)
             continue
-        else: break
+        else:
+            break
 
     # Display file info
-    info = fetch_file_info(path)
+    file_info = fetch_file_info(path)
     file_name = Text("FILE: " + path.name)
-    
+
     while True:
-        console.print(file_name + '\n' + "-" * len(file_name), justify="left", style="header")
-        console.print("Owner: " + info[0] + "\nSize: " + info[1] + "\nLast modified: " + info[2] + '\n', justify="left", style="default")
-        
-        console.print("1 - Create and use new key\n2 - Use exisiting key\n3 - Return", justify="left", style="default")
-        user_input = get_input(Text(": ", style="prompt"), False)
+        console.print(file_name + '\n' + "-" * len(file_name),
+                      justify="left", style="header")
+        console.print("Owner: " + file_info[0] + "\nSize: " + file_info[1] +
+                      "\nLast modified: " + file_info[2] + '\n', justify="left", style="default")
+
+        console.print("1 - Create and use new key\n2 - Use exisiting key\n3 - Return",
+                      justify="left", style="default")
+        input = user_input(prompt=Text(": ", style="prompt"), password=False)
         try:
-            user_int = int(user_input)
-            if user_int not in range(1,4): invalid_warning(Text("(-) Invalid option."), True)
+            user_int = int(input)
+            if user_int not in range(1, 4):
+                invalid_warning(Text("(-) Invalid option\n"), clear=True)
         except ValueError:
-            invalid_warning(Text("(-) Invalid input."), True)
+            invalid_warning(Text("(-) Invalid input\n"), clear=True)
             continue
 
         if user_int == 1:
-            enc_key = create_key_from_passphrase(prompt_for_storing=True)[2]            
-        elif user_int == 2:
-            enc_key = use_key_from_db()
-        
-        if enc_key == "":
-            console.print("(-) Unable to retrieve key.", justify="left", style="error")
-            return encrypt
-        elif user_int == 3:
-            return encrypt
-        break
-    
-    ciphers.encryption(path, enc_key)
+            hash_entry = create_new_hash_entry()
+            hash_entry = HashEntry(
+                date=hash_entry[0], comments=hash_entry[1], hash=hash_entry[2])
+            keyring_db.store_hash(hash_entry)
+            argon2_hash = hash_entry.hash
 
-    try:
-        remove(path)
-    except:
-        console.print("(-) Error deleting file: " + path.as_posix(), style="error")
-        invalid_warning("", True)
-        return encrypt
-    
+            # Parse argon2 string to structured object
+            argon2_hash = hashing.parse_argon2_hash(argon2_hash)
+            hash = argon2_hash.digest
+
+        elif user_int == 2:
+            hash = use_hash_from_db(keyring_db)
+            if hash == "":
+                console.print("(-) Unable to retrieve key",
+                              justify="left", style="error")
+                return State.ENCRYPT
+        elif user_int == 3:
+            return State.ENCRYPT
+
+        break
+
+    # Get name for output file
+    prompt = Text("File to write output to: ", style="prompt")
+    output_path = user_input(prompt, False)
+    console.print("")
+    output_path = Path(output_path)
+
+    ciphers.encryption(path, hash, output_path)
+
     return reset()
 
-def chose_decryption() -> int:
+
+def chose_decryption(keyring_db: KeyringDB) -> State:
     while True:
-        prompt = Text("Enter path to encrypted file: ", justify="left", style="prompt")
-        path_str = get_input(prompt, False)
+        prompt = Text("Enter path to encrypted file: ",
+                      justify="left", style="prompt")
+        path_str = user_input(prompt, False)
         console.print("")
         path = Path(path_str)
         if not path.exists():
-            invalid_warning(Text("(-) Path does not exist."), True)
+            invalid_warning(Text("(-) Path does not exist\n"), clear=True)
             continue
         elif path.is_dir():
-            invalid_warning(Text("(-) Path is a directory."), True)
+            invalid_warning(Text("(-) Path is a directory\n"), clear=True)
             continue
-        else: break
-    
-    # Display file info
-    info = list()
-    info = fetch_file_info(path)
-    file_name = Text("FILE: " + path.name)
-    console.print(file_name + '\n' + "-" * len(file_name), justify="left", style="header")
-    console.print("Owner: " + info[0] + "\nSize: " + info[1] + "\nLast modified: " + info[2] + '\n', justify="left", style="default")
+        else:
+            break
 
-    key = get_dec_key()
-    if key == "":
-        console.print("(-) Unable to get decryption key.", justify="left", style="error")
-        return decrypt
-    else:
-        ciphers.decryption(path, key)
-        try:
-            remove(path)
-        except:
-            console.print("(-) Error deleting file: " + path.as_posix(), style="error")
-            invalid_warning("", True)
-            return decrypt
-    
+    # Display file info
+    file_info = list()
+    file_info = fetch_file_info(path)
+    file_name = Text("FILE: " + path.name)
+    console.print(file_name + '\n' + "-" * len(file_name),
+                  justify="left", style="header")
+    console.print("Owner: " + file_info[0] + "\nSize: " + file_info[1] +
+                  "\nLast modified: " + file_info[2] + '\n', justify="left", style="default")
+
+    hash = get_hash(keyring_db)
+    if hash == "":
+        console.print("(-) Unable to get decryption key.",
+                      justify="left", style="error")
+        return State.DECRYPT
+
+    # Get name for output file
+    prompt = Text("File to write output to: ", style="prompt")
+    output_path = user_input(prompt, False)
+    console.print("")
+    output_path = Path(output_path)
+
+    ciphers.decryption(path, hash, output_path)
+
     return reset()
 
-def chose_mgmt() -> int:
+
+def chose_mgmt(keyring_db: KeyringDB) -> State:
     prompt = Text(": ", style="prompt")
     while True:
-        console.print("1 - Dump Keys\n2 - Add Key\n3 - Delete Key\n4 - Modify Comments\n5 - Return", justify="left", style="default")
-        user_input = get_input(prompt, False)
+        console.print("1 - Dump Keys\n2 - Add New Hash\n3 - Delete Hash\n4 - Modify Comments\n5 - Return",
+                      justify="left", style="default")
+        input = user_input(prompt, False)
         try:
-            user_int = int(user_input)
+            user_int = int(input)
             if user_int not in range(1, 6):
-                invalid_warning(Text("(-) Invalid option."), True)
+                invalid_warning(Text("(-) Invalid option\n"), clear=True)
                 continue
-            else: break
-        except:
-            invalid_warning(Text("(-) Invalid option."), True)
-    
-    if user_int == 1:
-        if db.dump_keys(True) == 0:
-            console.print("(-) No keys stored.", justify="left", style="error")
-    elif user_int == 2:
-        if create_key_from_passphrase(prompt_for_storing=False) == None:
-            return manage
-    elif user_int == 3:
-        if choose_key_to_delete() == -1:
-            invalid_warning(Text("(-) Unable to delete key."), True)
-            return manage
-    elif user_int == 4:
-        if edit_comments() == -1:
-            return manage
-        else: console.print("(+) Successfully edited comment", justify="left", style="header")
-    elif user_int == 5:
-        return start
+            else:
+                break
+        except ValueError:
+            invalid_warning(Text("(-) Invalid input\n"), clear=True)
+
+    match user_int:
+        case 1:
+            if not keyring_db.get_valid_ids():
+                console.print("(-) No keys stored",
+                              justify="left", style="error")
+            else:
+                keyring_db.dump_keys()
+        case 2:
+            hash_entry = create_new_hash_entry()
+            hash_entry = HashEntry(
+                date=hash_entry[0], comments=hash_entry[1], hash=hash_entry[2])
+            keyring_db.store_hash(hash_entry)
+            return State.MANAGE
+        case 3:
+            if delete_hash(keyring_db) == -1:
+                invalid_warning(
+                    Text("(-) Unable to delete hash\n"), clear=True)
+                return State.MANAGE
+        case 4:
+            if edit_comments(keyring_db) == -1:
+                invalid_warning(
+                    Text("(-) Unable to update comments\n"), clear=True)
+                return State.MANAGE
+            else:
+                console.print("(+) Successfully edited comment",
+                              justify="left", style="header")
+        case 5:
+            return State.START
 
     return reset()
 
-def initial_setup():
-    prompt = Text("Keyring database will be encrypted using a passphrase (IT WILL NOT BE STORED)\nEnter passphrase to use to encrypt Keyring database: ", style="prompt")
-    passphrase = get_input(prompt, True)
-    hash = hashlib.shake_128(passphrase.encode('utf-8')).digest(16)
-    environ["MAIN_KEY"]= hash.hex()
-    db.close_db()
-    console.print(environ.get("MAIN_KEY"))
-    return
 
-def get_main_db_key():
-    prompt = Text("Enter passphrase to decrypt/open keyring databse:", style="prompt")
-    db_copy = str(DB_PATH)+".copy"
-    while True:
-        user_input = get_input(prompt, True)
-        hash = hashlib.shake_128(user_input.encode('utf-8')).digest(16)
-        copy(str(DB_PATH)+".enc", db_copy)
-        ciphers.decryption_db(db_copy, bytes(hash.hex(), encoding='utf-8'))
-
-        if (db.db_okay(db_copy)):
-            copy(db_copy, DB_PATH)
-            remove(db_copy)
-            ciphers.decryption_db(db_copy, bytes(hash.hex(), encoding='utf-8'))
-            remove(DB_PATH)
-            break
-        else:
-            if (Path.exists(Path(db_copy))): remove(db_copy)
-            invalid_warning(Text("(-) Invalid passphrase provided."), False)
-            continue
-   
-    return hash.hex()
-        
 def main():
-    global start, encrypt, decrypt, manage
-    start = 0
-    encrypt = 1
-    decrypt = 2
-    manage = 3
-    
-    state = start
-    
-    db_exists = db.check_for_db()
-    if db_exists == -1:
-        exit()
-    elif db_exists == 1:
-        initial_setup()
-    else:
-        main_key = get_main_db_key()
-        environ["MAIN_KEY"] = main_key
+    # Get path for sqlite3 database
+    data_dir = Path(user_data_dir("lockbox"))
+    db_path = data_dir / "key-storage"
+    keyring_db = KeyringDB(db_path)
 
+    # Check if data directory and database already exists
+    if not db_path.exists():
+        print("[+] Creating data directory and key database")
+        try:
+            mkdir(data_dir)
+        except FileNotFoundError as err:
+            print("[-] Error creating data directory: ", err)
+            raise
+        except FileExistsError:
+            print("[-] Data directory exists, but no key database found")
+            print("[+] Creating new database")
+        finally:
+            keyring_db.initial_setup()
+
+    # Main application loop
+    state = State.START
     while True:
         console.clear()
         console.print(BANNER)
         match state:
-            case 0: # START
+            case State.START:
                 state = start_menu()
                 continue
 
-            case 1: # ENC
-                state = chose_encryption()
+            case State.ENCRYPT:
+                state = chose_encryption(keyring_db)
                 continue
 
-            case 2: # DEC
-                state = chose_decryption()
+            case State.DECRYPT:
+                state = chose_decryption(keyring_db)
                 continue
 
-            case 3: # MGMT
-                state = chose_mgmt()
+            case State.MANAGE:
+                state = chose_mgmt(keyring_db)
                 continue
-            
+
             case _:
                 break
+
+    return
+
 
 if __name__ == "__main__":
     main()

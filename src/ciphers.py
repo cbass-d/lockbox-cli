@@ -1,99 +1,67 @@
-from Crypto.Cipher import AES
-from Crypto.Util import Padding
 from pathlib import Path
-
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
+import os
+import base64
 from console_config import console
 
-def encryption(file_path: str, enc_key: bytearray):
 
-    #Open file
+def encryption(file_path: str, digest: str, output: Path) -> int:
+
+    # Open file
     try:
         file_path = Path(file_path)
         f = open(file_path, "rb")
     except Exception as err:
-        console.print("(-) Unable to open file " + file_path.as_posix() + ": " + str(type(err)), style="error")
+        console.print("(-) Unable to open file " +
+                      file_path.as_posix() + ": " + str(type(err)), style="error")
         return -1
-    
-    file_bytes = bytearray(f.read())
+    finally:
+        file_bytes = bytearray(f.read())
+        f.close()
 
-    file_bytes = Padding.pad(file_bytes, 16)
-    key = enc_key[:16]
-    iv = enc_key[-16:]
-    
-    cipher = AES.new(key, AES.MODE_CBC, iv=iv)
-    file_bytes = cipher.encrypt(file_bytes)
+    # Argon2 digest is base64 encoded
+    digest = base64.b64decode(digest + "==")
+    aesgcm = AESGCM(digest)
+    nonce = os.urandom(12)
+    ciphertext = aesgcm.encrypt(nonce, file_bytes, None)
 
-    new_path = Path(file_path.as_posix() + ".enc")
-    of = open(new_path, "wb")
-    of.write(file_bytes)
+    # Attach nonce to ciphertext for decrypting
+    ciphertext_nonce = nonce + ciphertext
 
-    console.print("(+) New encrypted data written to " + new_path.as_posix(), style="header")
+    with open(output, "wb") as of:
+        of.write(ciphertext_nonce)
+
+    console.print("(+) Encrypted data written to " +
+                  output.as_posix(), style="header")
 
 
-def decryption(file_path: str, enc_key: str):
+def decryption(file_path: str, digest: str, output: Path):
 
-    #Open file
+    # Open file
     try:
         file_path = Path(file_path)
         f = open(file_path, "rb")
     except Exception as err:
-        console.print("(-) Unable to open file " + file_path.as_posix() + ": " + str(type(err)), style="error")
+        console.print("(-) Unable to open file " +
+                      file_path.as_posix() + ": " + str(type(err)), style="error")
         return -1
-    
-    file_bytes = bytearray(f.read())
-    key = enc_key[:16]
-    iv = enc_key[-16:]
-    
-    cipher = AES.new(key, AES.MODE_CBC, iv=iv)
-    file_bytes = cipher.decrypt(file_bytes)
-    file_bytes = Padding.unpad(file_bytes, 16)
+    finally:
+        file_bytes = bytearray(f.read())
+        f.close()
 
-
-    new_path = Path(file_path.as_posix().removesuffix(".enc"))
-    of = open(new_path, "wb")
-    of.write(file_bytes)
-
-    console.print("(+) New decrypted data written to " + new_path.as_posix(), style="header")
-
-
-def encryption_db(file_path: str, enc_key: bytes):
-    #Open file
+    digest = base64.b64decode(digest + "==")
+    nonce = file_bytes[:12]
+    ciphertext = file_bytes[12:]
+    aesgcm = AESGCM(digest)
     try:
-        file_path = Path(file_path)
-        f = open(file_path, "rb")
-    except Exception as err:
-        console.print("(-) Unable to open file " + file_path.as_posix() + ": " + str(type(err)), style="error")
-        return -1
-    
-    file_bytes = bytearray(f.read())
-    key = enc_key
+        cleartext = aesgcm.decrypt(nonce, ciphertext, None)
+    except InvalidTag:
+        print("Unable to decrypt data with provided key")
+        return
 
-    cipher  = AES.new(key, AES.MODE_ECB)
-    file_bytes = cipher.encrypt(file_bytes)
+    with open(output, "wb") as of:
+        of.write(cleartext)
 
-    new_path = Path(file_path.as_posix() + ".enc")
-    of = open(new_path, "wb")
-    of.write(file_bytes)
-
-    console.print("(+) New encrypted data written to " + new_path.as_posix(), style="header")
-
-def decryption_db(file_path: str, enc_key: str):
-    #Open file
-    try:
-        file_path = Path(file_path)
-        f = open(file_path, "rb")
-    except Exception as err:
-        console.print("(-) Unable to open file " + file_path.as_posix() + ": " + str(type(err)), style="error")
-        return -1
-    
-    file_bytes = bytearray(f.read())
-    key = enc_key
-
-    cipher  = AES.new(key, AES.MODE_ECB)
-    file_bytes = cipher.decrypt(file_bytes)
-
-    new_path = Path(file_path.as_posix().removesuffix(".enc"))
-    of = open(new_path, "wb")
-    of.write(file_bytes)
-
-    console.print("(+) New decrypted data written to " + new_path.as_posix(), style="header")
+    console.print("(+) Encrypted data written to " +
+                  output.as_posix(), style="header")
